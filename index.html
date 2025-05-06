@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>InvenGo-Inventory Management</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 40px; background-color: #f4f4f4; color: #333; }
+    .container { max-width: 1000px; margin: auto; }
+    input, button, select { padding: 10px; margin: 5px 0; }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+    .row input, .row select { flex: 1; }
+    .btn { background-color: #4CAF50; color: white; border: none; cursor: pointer; border-radius: 5px; }
+    .btn:hover { background-color: #45a049; }
+    .btn-danger { background-color: #e53935; }
+    .btn-edit { background-color: #2196F3; }
+    .btn-export { background-color: #9C27B0; }
+    .btn-sort { background-color: #607D8B; }
+    table { width: 100%; margin-top: 20px; border-collapse: collapse; }
+    th, td { padding: 10px; text-align: center; border: 1px solid #444; }
+    th { background-color: #ccc; }
+    .summary { margin-top: 20px; font-weight: bold; }
+    .hidden { display: none; }
+    .auth-container {
+      max-width: 400px; margin: 100px auto; padding: 20px; background-color: white;
+      border: 1px solid #ccc; border-radius: 8px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.1);
+    }
+    .auth-container h2 { text-align: center; }
+    .low-stock { background-color: #ffee58; }
+    .logout { float: right; margin-top: -30px; margin-right: 10px; background-color: #f44336; }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.3/html2pdf.bundle.min.js"></script>
+</head>
+<body>
+
+<div id="authPage" class="auth-container">
+  <h2 id="authTitle">Login</h2>
+  <input type="text" id="authUsername" placeholder="Username"><br>
+  <input type="password" id="authPassword" placeholder="Password">
+  <input type="checkbox" id="showPass" onclick="togglePassword()"> Show Password<br>
+  <input type="text" id="authAnswer" class="hidden" placeholder="What is your favorite color?"><br>
+  <label><input type="checkbox" id="rememberMe"> Remember Me</label><br>
+  <button class="btn" onclick="handleAuth()">Login</button>
+  <p id="toggleText">Don't have an account? <a href="#" onclick="toggleAuth()">Sign up</a></p>
+  <p><a href="#" onclick="forgotPassword()">Forgot password?</a></p>
+  <p id="authError" style="color: red;"></p>
+</div>
+
+<div id="inventoryPage" class="container hidden">
+  <h1>InvenGo-Inventory Management System</h1>
+  <button class="btn logout" onclick="logout()">Logout</button>
+  <div class="row">
+    <input type="text" id="itemName" placeholder="Item Name">
+    <input type="number" id="itemQuantity" placeholder="Quantity">
+    <input type="number" id="itemPrice" placeholder="Price">
+    <input type="text" id="itemCategory" placeholder="Category">
+  </div>
+  <div class="row">
+    <button class="btn" onclick="addItem()">Add</button>
+    <button class="btn btn-export" onclick="exportCSV()">Export CSV</button>
+    <button class="btn btn-export" onclick="downloadPDF()">Download PDF</button>
+    <button class="btn btn-sort" onclick="sortInventory('name')">Sort Name</button>
+    <button class="btn btn-sort" onclick="sortInventory('quantity')">Sort Qty</button>
+    <button class="btn btn-sort" onclick="sortInventory('price')">Sort Price</button>
+    <button class="btn btn-sort" onclick="sortInventory('total')">Sort Total</button>
+    <button class="btn btn-danger" onclick="clearInventory()">Clear</button>
+  </div>
+  <div class="row">
+    <input type="text" id="searchInput" placeholder="Search item name..." oninput="renderTable()">
+    <select id="categoryFilter" onchange="renderTable()">
+      <option value="">All Categories</option>
+    </select>
+  </div>
+  <table id="inventoryTable">
+    <thead>
+      <tr>
+        <th>Name</th><th>Qty</th><th>Price</th><th>Total</th><th>Category</th><th>Actions</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+  <div class="summary" id="summaryInfo"></div>
+</div>
+
+<script>
+  let currentUser = null;
+  let isSignUpMode = false;
+  let inventory = [];
+
+  window.onload = () => {
+    const remembered = localStorage.getItem("rememberedUser");
+    if (remembered) {
+      const users = JSON.parse(localStorage.getItem("users") || "{}");
+      if (users[remembered]) {
+        currentUser = remembered;
+        loadInventory();
+        document.getElementById("authPage").classList.add("hidden");
+        document.getElementById("inventoryPage").classList.remove("hidden");
+        renderTable();
+      }
+    }
+  };
+
+  function toggleAuth() {
+    isSignUpMode = !isSignUpMode;
+    document.getElementById('authTitle').innerText = isSignUpMode ? "Sign Up" : "Login";
+    document.querySelector('#authPage button').innerText = isSignUpMode ? "Sign Up" : "Login";
+    document.getElementById('toggleText').innerHTML = isSignUpMode
+      ? 'Already have an account? <a href="#" onclick="toggleAuth()">Login</a>'
+      : 'Don\'t have an account? <a href="#" onclick="toggleAuth()">Sign up</a>';
+    document.getElementById('authAnswer').classList.toggle("hidden", !isSignUpMode);
+    document.getElementById('authError').innerText = '';
+  }
+
+  function togglePassword() {
+    const input = document.getElementById("authPassword");
+    input.type = input.type === "password" ? "text" : "password";
+  }
+
+  function handleAuth() {
+    const username = document.getElementById("authUsername").value.trim();
+    const password = document.getElementById("authPassword").value.trim();
+    const answer = document.getElementById("authAnswer").value.trim();
+    let users = JSON.parse(localStorage.getItem("users") || "{}");
+
+    if (!username || !password) {
+      document.getElementById("authError").innerText = "Please fill in all fields.";
+      return;
+    }
+
+    if (isSignUpMode) {
+      if (!answer) return document.getElementById("authError").innerText = "Please answer the security question.";
+      if (users[username]) return document.getElementById("authError").innerText = "Username exists.";
+      users[username] = { password, answer };
+      localStorage.setItem("users", JSON.stringify(users));
+      alert("Account created. You can log in.");
+      toggleAuth();
+    } else {
+      if (!users[username] || users[username].password !== password) {
+        document.getElementById("authError").innerText = "Invalid credentials.";
+        return;
+      }
+      currentUser = username;
+      if (document.getElementById("rememberMe").checked)
+        localStorage.setItem("rememberedUser", username);
+      else
+        localStorage.removeItem("rememberedUser");
+      document.getElementById("authPage").classList.add("hidden");
+      document.getElementById("inventoryPage").classList.remove("hidden");
+      loadInventory();
+      renderTable();
+    }
+  }
+
+  function forgotPassword() {
+    const username = prompt("Enter your username:");
+    let users = JSON.parse(localStorage.getItem("users") || "{}");
+    if (!users[username]) return alert("User not found.");
+    const answer = prompt("What is your favorite color?");
+    if (answer.toLowerCase() === users[username].answer.toLowerCase()) {
+      const newPass = prompt("Enter new password:");
+      if (newPass) {
+        users[username].password = newPass;
+        localStorage.setItem("users", JSON.stringify(users));
+        alert("Password reset. Please log in.");
+      }
+    } else {
+      alert("Incorrect answer.");
+    }
+  }
+
+  function logout() {
+    currentUser = null;
+    inventory = [];
+    localStorage.removeItem("rememberedUser");
+    document.getElementById("inventoryPage").classList.add("hidden");
+    document.getElementById("authPage").classList.remove("hidden");
+  }
+
+  function getUserKey() {
+    return `inventory_${currentUser}`;
+  }
+
+  function saveInventory() {
+    localStorage.setItem(getUserKey(), JSON.stringify(inventory));
+  }
+
+  function loadInventory() {
+    const data = localStorage.getItem(getUserKey());
+    if (data) inventory = JSON.parse(data);
+  }
+
+  function addItem() {
+    const name = document.getElementById('itemName').value.trim();
+    const quantity = parseInt(document.getElementById('itemQuantity').value);
+    const price = parseFloat(document.getElementById('itemPrice').value);
+    const category = document.getElementById('itemCategory').value.trim() || "Uncategorized";
+    if (!name || isNaN(quantity) || isNaN(price)) return alert("Invalid input.");
+    const existing = inventory.find(i => i.name === name && i.category === category);
+    if (existing) {
+      existing.quantity += quantity;
+      existing.price = price;
+    } else {
+      inventory.push({ name, quantity, price, category });
+    }
+    document.getElementById('itemName').value = '';
+    document.getElementById('itemQuantity').value = '';
+    document.getElementById('itemPrice').value = '';
+    document.getElementById('itemCategory').value = '';
+    saveInventory();
+    renderTable();
+  }
+
+  function deleteItem(index) {
+    if (confirm("Delete this item?")) {
+      inventory.splice(index, 1);
+      saveInventory();
+      renderTable();
+    }
+  }
+
+  function editItem(index) {
+    const item = inventory[index];
+    const newQty = prompt("New quantity:", item.quantity);
+    const newPrice = prompt("New price:", item.price);
+    if (!isNaN(newQty) && !isNaN(newPrice)) {
+      item.quantity = parseInt(newQty);
+      item.price = parseFloat(newPrice);
+      saveInventory();
+      renderTable();
+    }
+  }
+
+  function clearInventory() {
+    if (confirm("Clear all items?")) {
+      inventory = [];
+      localStorage.removeItem(getUserKey());
+      renderTable();
+    }
+  }
+
+  function exportCSV() {
+    let csv = "Name,Quantity,Price,Total,Category\n";
+    inventory.forEach(i => {
+      csv += `${i.name},${i.quantity},${i.price},${i.quantity * i.price},${i.category}\n`;
+    });
+    const blob = new Blob([csv], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "inventory.csv";
+    a.click();
+  }
+
+  function downloadPDF() {
+    const element = document.createElement("div");
+    let html = `<h2>Inventory Report</h2>`;
+    html += `<table border="1" cellspacing="0" cellpadding="5">
+      <thead><tr><th>Name</th><th>Qty</th><th>Price</th><th>Total</th><th>Category</th></tr></thead><tbody>`;
+    inventory.forEach(i => {
+      html += `<tr>
+        <td>${i.name}</td><td>${i.quantity}</td>
+        <td>${i.price.toFixed(2)}</td><td>${(i.quantity * i.price).toFixed(2)}</td>
+        <td>${i.category}</td>
+      </tr>`;
+    });
+    html += `</tbody></table>`;
+    html += `<p><strong>Total Quantity:</strong> ${inventory.reduce((a, b) => a + b.quantity, 0)}</p>`;
+    html += `<p><strong>Total Value:</strong> ₹${inventory.reduce((a, b) => a + (b.quantity * b.price), 0).toFixed(2)}</p>`;
+    element.innerHTML = html;
+
+    html2pdf().from(element).set({
+      margin: 10,
+      filename: 'inventory.pdf',
+      html2canvas: { scale: 2 },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+    }).save();
+  }
+
+  function sortInventory(field) {
+    inventory.sort((a, b) => {
+      if (field === "name") return a.name.localeCompare(b.name);
+      if (field === "total") return (a.quantity * a.price) - (b.quantity * b.price);
+      return a[field] - b[field];
+    });
+    renderTable();
+  }
+
+  function renderTable() {
+    const tbody = document.querySelector("#inventoryTable tbody");
+    tbody.innerHTML = '';
+    const filter = document.getElementById('searchInput').value.toLowerCase();
+    const selectedCat = document.getElementById('categoryFilter').value;
+    let totalQty = 0, totalValue = 0;
+    const categories = new Set();
+    inventory.forEach((item, index) => {
+      if (
+        item.name.toLowerCase().includes(filter) &&
+        (selectedCat === "" || item.category === selectedCat)
+      ) {
+        categories.add(item.category);
+        const row = document.createElement("tr");
+        if (item.quantity < 5) row.classList.add("low-stock");
+        const total = item.quantity * item.price;
+        totalQty += item.quantity;
+        totalValue += total;
+        row.innerHTML = `
+          <td>${item.name}</td><td>${item.quantity}</td>
+          <td>${item.price.toFixed(2)}</td><td>${total.toFixed(2)}</td>
+          <td>${item.category}</td>
+          <td>
+            <button class="btn btn-edit" onclick="editItem(${index})">Edit</button>
+            <button class="btn btn-danger" onclick="deleteItem(${index})">Delete</button>
+          </td>`;
+        tbody.appendChild(row);
+      }
+    });
+    const catFilter = document.getElementById('categoryFilter');
+    const existingOptions = Array.from(catFilter.options).map(opt => opt.value);
+    categories.forEach(cat => {
+      if (!existingOptions.includes(cat)) {
+        const opt = document.createElement("option");
+        opt.value = cat;
+        opt.text = cat;
+        catFilter.appendChild(opt);
+      }
+    });
+    document.getElementById('summaryInfo').innerText =
+      `Total Qty: ${totalQty} | Total Value: ₹${totalValue.toFixed(2)}`;
+  }
+</script>
+<footer style="margin-top: 100px; padding: 20px; background-color: rgba(0, 0, 0, 0.8); color: white; border-top: 1px solid #ccc;">
+  <div style="display: flex; justify-content: center; align-items: center; gap: 50px; text-align: center;">
+    <!-- Person 1 -->
+    <div style="display: flex; flex-direction: column; align-items: center;">
+      <img src="C:\Users\PC-ASUS\Downloads\IMG_20250321_191634_125.JPG" alt="Sahil Nandi" style="width: 70px; height: 70px; border-radius: 50%; border: 2px solid white;">
+      <h3 style="margin: 10px 0 5px;">SAHIL NANDI</h3>
+      <p style="margin: 0;">
+        <a href="https://www.instagram.com/sahiiilllll1___0?igsh=cXZnaGduOGd1OW96" target="_blank" style="color: white; text-decoration: none; margin-right: 10px;">
+          <img src="https://upload.wikimedia.org/wikipedia/commons/a/a5/Instagram_icon.png" alt="Instagram" style="width: 20px; height: 20px; vertical-align: middle;"> sahiiilllll1___0
+        </a>
+        <a href="https://www.linkedin.com/in/sahil-nandi-870316291?utm_source=share&utm_campaign=share_via&utm_content=profile&utm_medium=android_app" target="_blank" style="color: white; text-decoration: none; margin-right: 10px;">
+          <img src="https://upload.wikimedia.org/wikipedia/commons/c/ca/LinkedIn_logo_initials.png" alt="LinkedIn" style="width: 20px; height: 20px; vertical-align: middle;"> Sahil Nandi
+        </a>
+        <a href="mailto:sahilnandi@sspubhilai.com" target="_blank" style="color: white; text-decoration: none;">
+          <img src="https://upload.wikimedia.org/wikipedia/commons/4/4e/Gmail_Icon.png" alt="Email" style="width: 20px; height: 20px; vertical-align: middle;"> sahilnandi@sspubhilai.com
+        </a>
+      </p>
+    </div>
+
+    <!-- Highlighted "Developed by" Message -->
+    <div style="text-align: center; font-size: 18px; font-weight: bold; color: yellow;">
+      <h2>-Developed by-</h2>
+    </div>
+
+    <!-- Person 2 -->
+    <div style="display: flex; flex-direction: column; align-items: center;">
+      <img src="C:\Users\PC-ASUS\Downloads\A-30161.JPG" alt="Siddharth Gupta" style="width: 70px; height: 70px; border-radius: 50%; border: 2px solid white;">
+      <h3 style="margin: 10px 0 5px;">SIDDHARTH GUPTA</h3>
+      <p style="margin: 0;">
+        <a href="https://www.instagram.com/_siddharthguptaa?igsh=MXEwMmg4Yzg3Zzltbg==" target="_blank" style="color: white; text-decoration: none; margin-right: 10px;">
+          <img src="https://upload.wikimedia.org/wikipedia/commons/a/a5/Instagram_icon.png" alt="Instagram" style="width: 20px; height: 20px; vertical-align: middle;"> _siddharthguptaa
+        </a>
+        <a href="https://linkedin.com/in/person2" target="_blank" style="color: white; text-decoration: none; margin-right: 10px;">
+          <img src="https://upload.wikimedia.org/wikipedia/commons/c/ca/LinkedIn_logo_initials.png" alt="LinkedIn" style="width: 20px; height: 20px; vertical-align: middle;"> Siddharth Gupta
+        </a>
+        <a href="mailto:siddharthgupta@sspubhilai.com" target="_blank" style="color: white; text-decoration: none;">
+          <img src="https://upload.wikimedia.org/wikipedia/commons/4/4e/Gmail_Icon.png" alt="Email" style="width: 20px; height: 20px; vertical-align: middle;"> siddharthgupta@sspubhilai.com
+        </a>
+      </p>
+    </div>
+  </div>
+  <!-- Copyright Message -->
+  <div style="text-align: center; margin-top: 40px; font-size: 14px; color: white;">
+    © 2025 All Rights Reserved.Released Under The MIT License.
+  </div>
+</footer>
+</body>
+</html>
